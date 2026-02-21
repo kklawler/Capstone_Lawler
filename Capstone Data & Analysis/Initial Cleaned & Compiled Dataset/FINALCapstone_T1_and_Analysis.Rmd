@@ -1,0 +1,469 @@
+---
+title: "PD VD T1 and Analysis
+author: "Katie Lawler"
+date: "`r Sys.Date()`"
+output: 
+  word_document:
+    reference_docx: null
+---
+
+#Packages
+```{r}
+# Install and load necessary packages
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(haven)  
+library(purrr)
+library(stringr)
+library(table1)
+library(flextable)
+
+
+```
+
+
+#Importing Datasets
+```{r}
+demographics_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/DemographicsData.xpt')
+
+bmi_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/BMIData.xpt')
+
+diabetes_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/DiabetesData.xpt')
+
+vitamind_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/VitaminDData.xpt')
+
+gly_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/GlyData.xpt')
+
+alc_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/AlcData.xpt')
+
+kidney_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/KidneyData.xpt')
+
+physact_data <- read_xpt('/Users/maryklawler/Desktop/Capstone Research Report/Initial Data (Uncleaned)/PhysicalActData.xpt')
+
+#All individual datasets at this point, just imported
+```
+
+#Merging Datasets Based on SEQN Number
+```{r}
+# Put them all in a list
+datasets <- list(
+  demographics_data,
+  bmi_data,
+  diabetes_data,
+  vitamind_data,
+  gly_data,
+  alc_data,
+  kidney_data,
+  physact_data
+)
+
+# Merge into single dataset
+initial_dataset <- reduce(datasets, full_join, by = "SEQN")
+
+```
+
+#Cleaning Prediabetes Var
+```{r}
+initial_dataset <- initial_dataset %>%
+  mutate(
+    prediabetes = case_when(
+      DIQ160 == 1 ~ 1,   # Yes
+      DIQ160 == 2 ~ 0,   # No
+      TRUE ~ NA_real_
+    )
+  )
+
+# Step 2: Filter to just prediabetes dataset
+prediabetes_dataset <- initial_dataset %>%
+  filter(prediabetes == 1)
+```
+
+#Cleaning and Categorizing Vitamin D Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    vitd_status = case_when(
+      LBXVIDMS < 30                    ~ "Deficient",
+      LBXVIDMS >= 30 & LBXVIDMS < 50  ~ "Insufficient",
+      LBXVIDMS >= 50                   ~ "Sufficient",
+      TRUE                             ~ NA_character_
+    ) %>% 
+      factor(levels = c("Deficient", "Insufficient", "Sufficient"))
+  )
+
+
+```
+
+
+#Cleaning Sex/Gender Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    sex = case_when(
+      RIAGENDR == 1 ~ "Male",
+      RIAGENDR == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("Male", "Female"))
+  )
+```
+
+
+#Cleaning Age Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(age = RIDAGEYR)
+```
+
+#Cleaning Race/Ethnicity Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    # Step 1: Standard NHANES categories
+    race_ethnicity = case_when(
+      RIDRETH3 == 1 ~ "Mexican American",
+      RIDRETH3 == 2 ~ "Other Hispanic",
+      RIDRETH3 == 3 ~ "Non-Hispanic White",
+      RIDRETH3 == 4 ~ "Non-Hispanic Black",
+      RIDRETH3 == 6 ~ "Non-Hispanic Asian",
+      RIDRETH3 == 7 ~ "Other/Multi-Racial",
+      TRUE ~ NA_character_
+    ),
+    # Step 2: Create Binary Race for stable interactions
+    # Non-Hispanic White is the reference group (first in levels)
+    race_binary = case_when(
+      race_ethnicity == "Non-Hispanic White" ~ "Non-Hispanic White",
+      is.na(race_ethnicity) ~ NA_character_,
+      TRUE ~ "Non-White"
+    ) %>% factor(levels = c("Non-Hispanic White", "Non-White"))
+  )
+
+# Verify the reference group (the first level shown is the reference)
+levels(prediabetes_dataset$race_binary)
+```
+
+#Cleaning BMI Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(bmi = BMXBMI)
+```
+
+
+#Cleaning & Recategorizing Alc Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    alcohol_intake = case_when(
+      ALQ170 %in% c(777, 999) ~ NA_character_,    # refused/don't know
+      ALQ170 >= 15 | ALQ170 == 30 ~ "High",       # 15–20 times or "more than 20 times"
+      ALQ170 < 15 ~ "Low",                        # 0–14 times
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("Low", "High"))
+  )
+```
+
+#Cleaning Kidney Issues Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    kidney_issue = case_when(
+      KIQ022 == 1 ~ "Yes",
+      KIQ022 == 2 ~ "No",
+      TRUE ~ NA_character_
+    ) %>% factor(levels = c("No", "Yes"))
+  )
+```
+
+#Cleaning & Recategorizing Phys. Act. Var 
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    sedentary_status3 = case_when(
+      PAD680 %in% c(7777, 9999) ~ NA_character_,
+      PAD680 < 300               ~ "Low",
+      PAD680 >= 300 & PAD680 < 600 ~ "Medium",
+      PAD680 >= 600              ~ "High",
+      TRUE                        ~ NA_character_
+    ) %>% factor(levels = c("Low", "Medium", "High"))
+  )
+```
+
+
+#Cleaning Gly Control/HbA1C Var
+```{r}
+prediabetes_dataset <- prediabetes_dataset %>%
+  mutate(
+    hba1c = LBXGH
+  )
+```
+
+#Complete Count
+```{r}
+
+# Define the key variables you want to require as complete
+vars_to_check <- c("prediabetes", "vitd_status", "hba1c", "sex", "age", "race_ethnicity", "bmi")
+
+# Count rows with complete data for key variables
+complete_rows <- prediabetes_dataset %>%
+  filter(complete.cases(across(all_of(vars_to_check)))) %>%
+  nrow()
+
+# Total rows in dataset
+total_rows <- nrow(prediabetes_dataset)
+
+message("Total participants: ", total_rows)
+message("Participants with complete data for key variables: ", complete_rows)
+message("Proportion complete: ", round(complete_rows / total_rows, 3))
+```
+
+#New Clean Dataset  - REMOVED alc, Kidney, Phys. Act!!!
+```{r}
+clean_prediabetes_dataset <- prediabetes_dataset %>%
+  dplyr::select(
+    SEQN,            
+    hba1c,
+    vitd_status,
+    age,
+    sex,
+    race_ethnicity,
+    bmi
+  )
+
+# Drop rows with missing values
+clean_prediabetes_dataset <- clean_prediabetes_dataset %>%
+  filter(complete.cases(.))
+
+```
+
+#Table 1 / Descriptives
+```{r}
+library(table1)
+
+# Ensure vitd_status is a factor with correct order
+clean_prediabetes_dataset$vitd_status <- factor(clean_prediabetes_dataset$vitd_status,
+                                                levels = c("Deficient", "Insufficient", "Sufficient"))
+
+# Label variables
+label(clean_prediabetes_dataset$hba1c) <- "HbA1c (%)"
+label(clean_prediabetes_dataset$age) <- "Age (Years)"
+label(clean_prediabetes_dataset$sex) <- "Sex"
+label(clean_prediabetes_dataset$race_ethnicity) <- "Race/Ethnicity"
+label(clean_prediabetes_dataset$bmi) <- "BMI (Kg/M²)"
+
+# Table1 with Times New Roman font
+table1(~ hba1c + age + sex + race_ethnicity + bmi | vitd_status,
+       data = clean_prediabetes_dataset,
+       caption = "Table 1. Descriptive Characteristics of Prediabetic Participants Stratified by Vitamin D Status",
+       render.categorical = function(x) {
+         render.default(x, render.missing = " (Missing)", footnote = FALSE)
+       },
+       render.continuous = function(x) {
+         render.default(x, render.missing = " (Missing)")
+       })
+
+# If knitting to HTML, you can wrap the table in a div with Times New Roman
+cat('<div style="font-family: Times New Roman;">')
+table1(~ hba1c + age + sex + race_ethnicity + bmi | vitd_status,
+       data = clean_prediabetes_dataset,
+       caption = "Table 1. Descriptive Characteristics of Prediabetic Participants Stratified by Vitamin D Status")
+cat('</div>')
+
+
+```
+
+#Exporting Table1 via Flextable - NOT PRINTING RN
+```{r}
+# Load required packages
+library(table1)
+library(flextable)
+library(officer)
+library(dplyr)
+
+# Make sure vitd_status is a factor with correct order
+clean_prediabetes_dataset$vitd_status <- factor(clean_prediabetes_dataset$vitd_status,
+                                                levels = c("Deficient", "Insufficient", "Sufficient"))
+
+# Label variables for nicer table output
+label(clean_prediabetes_dataset$hba1c) <- "HbA1c (%)"
+label(clean_prediabetes_dataset$age) <- "Age (Years)"
+label(clean_prediabetes_dataset$sex) <- "Sex"
+label(clean_prediabetes_dataset$race_ethnicity) <- "Race/Ethnicity"
+label(clean_prediabetes_dataset$bmi) <- "BMI (Kg/M²)"
+
+# Create the table1 object (summary)
+t1 <- table1(~ hba1c + age + sex + race_ethnicity + bmi | vitd_status,
+             data = clean_prediabetes_dataset,
+             render.continuous = function(x) render.default(x, render.missing = " (Missing)"),
+             render.categorical = function(x) render.default(x, render.missing = " (Missing)", footnote=FALSE))
+
+# Convert table1 object to data frame
+t1_df <- as.data.frame(t1)
+
+# Create a flextable from the data frame
+ft <- flextable(t1_df)
+
+# Set font to Times New Roman
+ft <- font(ft, fontname = "Times New Roman")
+
+# Add a title to the table
+ft <- add_header_lines(ft, values = "Table 1. Descriptive Characteristics of Prediabetic Participants Stratified by Vitamin D Status")
+
+# Optional: Auto-adjust column widths for better formatting
+ft <- autofit(ft)
+
+# Export to Word
+#doc <- read_docx()
+#doc <- body_add_flextable(doc, ft)
+#print(doc, target = "Table1_Descriptives.docx")
+
+# The file Table1_Descriptives.docx will be in your working directory
+
+```
+
+#Filtering/Reordering Vars for Analysis
+```{r}
+
+# Filter dataset to complete cases only for these variables
+regression_dataset <- prediabetes_dataset %>%
+  filter(complete.cases(across(all_of(vars_to_check))))
+
+# Set 'Sufficient' as the reference category for Vitamin D
+regression_dataset$vitd_status <- relevel(as.factor(regression_dataset$vitd_status), ref = "Sufficient")
+
+
+
+```
+
+
+#START OF ANALYSIS!!!!!!!
+
+#MLR Model
+```{r}
+# Model
+mvlinearreg_model <- lm(hba1c ~ vitd_status + sex + age + race_ethnicity + bmi, 
+                      data = regression_dataset)
+
+# View the results
+summary(mvlinearreg_model)
+        
+```
+
+#Printing MLR Model Results / Nicer Table
+```{r}
+# 1. Turn the model results into a clean data frame
+# (broom is standard in R, if you don't have it, use: install.packages("broom"))
+library(broom)
+model_results <- tidy(mvlinearreg_model, conf.int = TRUE)
+
+# 2. Create the flextable
+reg_table <- flextable(model_results) %>%
+  # Round the numbers to 3 decimal places for neatness
+  colformat_double(digits = 3) %>%
+  # Rename headers to be professional
+  set_header_labels(
+    term = "Variable",
+    estimate = "Coefficient (β)",
+    std.error = "Std. Error",
+    statistic = "t-value",
+    p.value = "p-value",
+    conf.low = "95% CI (Lower)",
+    conf.high = "95% CI (Upper)"
+  ) %>%
+  # Bold the significant results (p < 0.05)
+  bold(i = ~ p.value < 0.05, j = ~ p.value) %>%
+  # Aesthetics
+  font(fontname = "Times New Roman", part = "all") %>%
+  autofit()
+
+# 3. View the table
+reg_table
+
+# 4. Export to Word (Uses your existing 'doc' approach)
+doc <- read_docx()
+doc <- body_add_flextable(doc, reg_table)
+print(doc, target = "Regression_Results_Table.docx")
+```
+
+
+#Checking Assumptions for MLR
+```{r}
+#1. Linearity -- PASSED
+  # Residuals vs Fitted Plot -- look for a flat red line centered at zero
+  plot(mvlinearreg_model, which = 1)
+
+#2. Independence of Errors -- PASSED
+  # Durbin-Watson Test - a value near 2 indicates independence; p > 0.05 is good.
+  library(car)
+  durbinWatsonTest(mvlinearreg_model)
+
+#3. Homoscedasticity (Equal Variance) -- PASSED
+    # Scale-Location Plot (Visual) -- look for a flat red line with a random cloud of points
+    plot(mvlinearreg_model, which = 3)
+    
+#4. Normality of Errors/Resid. -- PASSED, a few outliers (but checked their values)
+    # Q-Q Plot -- points should fall strictly on the dashed line
+    plot(mvlinearreg_model, which = 2)
+    #Also checked the outliers from the plot, all of their A1C levels are clinically possible
+
+#5. No Multicolinearity
+  # Variance Inflation Factor (VIF) -- values < 5 are generally acceptable; values > 10 indicate high multicollinearity
+  vif(mvlinearreg_model)
+    
+
+```
+
+
+
+#Interaction Terms
+```{r}
+# Models how VD interacts with every other covariate (VDD * each covariate)
+interaction_model_vD <- lm(hba1c ~ vitd_status * (sex + age + race_ethnicity + bmi), 
+                           data = regression_dataset)
+
+#Print results
+summary(interaction_model_vD)
+
+```
+
+#Printing Interaction Terms / Nicer Table
+```{r}
+# 1. Convert the interaction model to a data frame
+library(broom)
+interaction_results <- tidy(interaction_model_vD, conf.int = TRUE)
+
+# 2. Clean up the variable names for the table
+# This replaces the colons and underscores with cleaner text
+interaction_results$term <- gsub("vitd_status", "Vitamin D ", interaction_results$term)
+interaction_results$term <- gsub("sex", "Sex: ", interaction_results$term)
+interaction_results$term <- gsub("race_ethnicity", "Race: ", interaction_results$term)
+interaction_results$term <- gsub("bmi", "BMI", interaction_results$term)
+interaction_results$term <- gsub("age", "Age", interaction_results$term)
+interaction_results$term <- gsub(":", " * ", interaction_results$term)
+
+# 3. Create the flextable
+int_table <- flextable(interaction_results) %>%
+  colformat_double(digits = 3) %>%
+  set_header_labels(
+    term = "Predictor (Main Effects & Interactions)",
+    estimate = "Beta (β)",
+    std.error = "SE",
+    p.value = "p-value",
+    conf.low = "Lower CI",
+    conf.high = "Upper CI"
+  ) %>%
+  # Highlight the significant interaction you found (Sex * Vit D)
+  bg(i = ~ p.value < 0.05, bg = "#f2f2f2") %>% 
+  bold(i = ~ p.value < 0.05) %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 9, part = "all") %>% # Slightly smaller to fit interaction terms
+  autofit()
+
+# 4. View and Export
+int_table
+
+doc_int <- read_docx()
+doc_int <- body_add_flextable(doc_int, int_table)
+print(doc_int, target = "Table3_Interaction_Results.docx")
+```
+
+
